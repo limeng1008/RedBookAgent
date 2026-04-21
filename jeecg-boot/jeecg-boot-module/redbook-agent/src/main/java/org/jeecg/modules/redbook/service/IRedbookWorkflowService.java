@@ -6,6 +6,7 @@ import org.jeecg.modules.redbook.entity.RbNoteDraft;
 import org.jeecg.modules.redbook.entity.RbNoteMetric;
 import org.jeecg.modules.redbook.entity.RbPublishPlan;
 import org.jeecg.modules.redbook.entity.RbReviewReport;
+import org.jeecg.modules.redbook.vo.RedbookDraftRiskCheckVO;
 import org.jeecg.modules.redbook.vo.RedbookReviewDashboardVO;
 import org.jeecg.modules.redbook.vo.RedbookWorkbenchOverviewVO;
 
@@ -16,6 +17,8 @@ public interface IRedbookWorkflowService {
     RbHotspotAnalysis analyzeHotspot(String hotspotId);
 
     RbNoteDraft generateDraftByAnalysis(String analysisId);
+
+    RedbookDraftRiskCheckVO checkDraftRisk(String draftId);
 
     RbPublishPlan createPublishPlan(String draftId);
 

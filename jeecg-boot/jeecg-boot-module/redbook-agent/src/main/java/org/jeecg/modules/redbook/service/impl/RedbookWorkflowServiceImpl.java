@@ -28,6 +28,8 @@ import org.jeecg.modules.redbook.service.IRedbookWorkflowService;
 import org.jeecg.modules.redbook.vo.RedbookReviewDashboardVO;
 import org.jeecg.modules.redbook.vo.RedbookReviewDimensionVO;
 import org.jeecg.modules.redbook.vo.RedbookReviewRankItemVO;
+import org.jeecg.modules.redbook.vo.RedbookDraftRiskCheckVO;
+import org.jeecg.modules.redbook.vo.RedbookDraftRiskHitVO;
 import org.jeecg.modules.redbook.vo.RedbookWorkbenchOverviewVO;
 import org.jeecg.modules.redbook.vo.RedbookWorkbenchTodoVO;
 import org.jeecg.modules.redbook.vo.RedbookWorkbenchTrackVO;
@@ -222,6 +224,62 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public RedbookDraftRiskCheckVO checkDraftRisk(String draftId) {
+        if (isBlank(draftId)) {
+            throw new IllegalArgumentException("草稿ID不能为空");
+        }
+        RbNoteDraft draft = noteDraftService.getById(draftId);
+        if (draft == null) {
+            throw new IllegalArgumentException("未找到对应草稿");
+        }
+
+        Map<String, String> riskFields = new LinkedHashMap<>();
+        riskFields.put("标题", draft.getTitle());
+        riskFields.put("封面文案", draft.getCoverCopy());
+        riskFields.put("正文", draft.getBody());
+        riskFields.put("标签", draft.getTags());
+        riskFields.put("评论引导", draft.getCommentGuide());
+
+        List<RedbookDraftRiskHitVO> hits = listActiveSensitiveWords().stream()
+            .map(word -> buildDraftRiskHit(word, riskFields))
+            .filter(Objects::nonNull)
+            .sorted(Comparator.comparingInt((RedbookDraftRiskHitVO item) -> riskLevelWeight(item.getRiskLevel())).reversed()
+                .thenComparing(RedbookDraftRiskHitVO::getWord, Comparator.nullsLast(String::compareTo)))
+            .collect(Collectors.toList());
+
+        List<String> matchedFields = hits.stream()
+            .flatMap(item -> item.getMatchedFields().stream())
+            .distinct()
+            .collect(Collectors.toList());
+        List<String> replacementSuggestions = hits.stream()
+            .map(RedbookDraftRiskHitVO::getReplacementSuggestion)
+            .filter(item -> !isBlank(item))
+            .distinct()
+            .limit(5)
+            .collect(Collectors.toList());
+        String riskLevel = resolveDraftRiskLevel(hits);
+        String summary = buildDraftRiskSummary(hits, matchedFields, replacementSuggestions, riskLevel);
+
+        draft.setRiskCheckResult(summary);
+        noteDraftService.updateById(draft);
+
+        RedbookDraftRiskCheckVO result = new RedbookDraftRiskCheckVO();
+        result.setDraftId(draft.getId());
+        result.setTitle(defaultText(draft.getTitle(), "未命名草稿"));
+        result.setPassed(hits.isEmpty());
+        result.setRequiresManualReview(!hits.isEmpty());
+        result.setRiskLevel(riskLevel);
+        result.setHitCount((long) hits.size());
+        result.setMatchedFields(matchedFields);
+        result.setReplacementSuggestions(replacementSuggestions);
+        result.setSummary(summary);
+        result.setCheckedTime(new Date());
+        result.setHits(hits);
+        return result;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public RbPublishPlan createPublishPlan(String draftId) {
         RbNoteDraft draft = noteDraftService.getById(draftId);
         if (draft == null) {
@@ -297,10 +355,14 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         List<RbNoteMetric> existingMetrics = noteMetricService.lambdaQuery()
             .eq(RbNoteMetric::getPublishPlanId, publishPlanId)
             .list();
+        String nextCollectNode = nextMetricCollectNode(existingMetrics);
+        if (isBlank(nextCollectNode)) {
+            throw new IllegalArgumentException("2h / 24h / 72h / 7d 四个关键数据节点已全部生成，请直接编辑现有记录");
+        }
         RbNoteMetric metric = new RbNoteMetric();
         metric.setPublishPlanId(publishPlanId);
         metric.setNoteDraftId(publishPlan.getDraftId());
-        metric.setCollectNode(nextMetricCollectNode(existingMetrics));
+        metric.setCollectNode(nextCollectNode);
         metric.setImpressions(0L);
         metric.setViews(0L);
         metric.setLikes(0L);
@@ -314,9 +376,7 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         metric.setCollectTime(new Date());
         metric.setRemark("由发布计划生成，请录入当前节点的小红书后台数据。");
         noteMetricService.save(noteMetricService.normalizeMetric(metric));
-
-        publishPlan.setPublishStatus(RedbookStatusConstant.PUBLISH_DATA_COLLECTED);
-        publishPlanService.updateById(publishPlan);
+        noteMetricService.refreshPublishPlanStatus(publishPlanId);
         return metric;
     }
 
@@ -755,15 +815,91 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         if (isBlank(joinedText)) {
             return new ArrayList<>();
         }
-        return sensitiveWordService.lambdaQuery()
-            .eq(RbSensitiveWord::getStatus, RedbookStatusConstant.ACTIVE)
-            .list()
-            .stream()
+        return listActiveSensitiveWords().stream()
             .map(RbSensitiveWord::getWord)
             .filter(word -> !isBlank(word) && joinedText.contains(word.toLowerCase(Locale.ROOT)))
             .distinct()
             .limit(8)
             .collect(Collectors.toList());
+    }
+
+    private List<RbSensitiveWord> listActiveSensitiveWords() {
+        return sensitiveWordService.lambdaQuery()
+            .eq(RbSensitiveWord::getStatus, RedbookStatusConstant.ACTIVE)
+            .list();
+    }
+
+    private RedbookDraftRiskHitVO buildDraftRiskHit(RbSensitiveWord sensitiveWord, Map<String, String> riskFields) {
+        if (sensitiveWord == null || isBlank(sensitiveWord.getWord())) {
+            return null;
+        }
+        List<String> matchedFields = riskFields.entrySet().stream()
+            .filter(entry -> containsIgnoreCase(entry.getValue(), sensitiveWord.getWord()))
+            .map(Map.Entry::getKey)
+            .collect(Collectors.toList());
+        if (matchedFields.isEmpty()) {
+            return null;
+        }
+        RedbookDraftRiskHitVO hit = new RedbookDraftRiskHitVO();
+        hit.setWord(sensitiveWord.getWord());
+        hit.setCategory(defaultText(sensitiveWord.getCategory(), "未分类"));
+        hit.setRiskLevel(firstNonBlank(sensitiveWord.getRiskLevel(), "medium"));
+        hit.setReplacementSuggestion(firstNonBlank(sensitiveWord.getReplacementSuggestion(), "建议改成更客观、可验证的表达"));
+        hit.setMatchedFields(matchedFields);
+        return hit;
+    }
+
+    private String resolveDraftRiskLevel(List<RedbookDraftRiskHitVO> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return "low";
+        }
+        if (hits.stream().anyMatch(item -> "high".equalsIgnoreCase(item.getRiskLevel()))) {
+            return "high";
+        }
+        if (hits.size() >= 3 || hits.stream().anyMatch(item -> "medium".equalsIgnoreCase(item.getRiskLevel()))) {
+            return "medium";
+        }
+        return "low";
+    }
+
+    private String buildDraftRiskSummary(
+        List<RedbookDraftRiskHitVO> hits,
+        List<String> matchedFields,
+        List<String> replacementSuggestions,
+        String riskLevel
+    ) {
+        if (hits == null || hits.isEmpty()) {
+            return "未命中明显敏感词，建议发布前再人工核对绝对化承诺、收益夸大和功效表述。";
+        }
+        String hitWords = hits.stream()
+            .map(RedbookDraftRiskHitVO::getWord)
+            .filter(item -> !isBlank(item))
+            .distinct()
+            .limit(6)
+            .collect(Collectors.joining("、"));
+        String fieldText = matchedFields == null || matchedFields.isEmpty() ? "内容字段" : String.join("、", matchedFields);
+        String suggestionText = replacementSuggestions == null || replacementSuggestions.isEmpty()
+            ? "建议改写后再进入人工审核。"
+            : "建议优先替换为：" + String.join("；", replacementSuggestions.stream().limit(3).collect(Collectors.toList()));
+        return "本次风险检查命中 " + hits.size() + " 个敏感词，主要分布在 " + fieldText
+            + "。当前风险等级为 " + riskLevel + "，命中词包括：" + hitWords + "。" + suggestionText;
+    }
+
+    private int riskLevelWeight(String riskLevel) {
+        if ("high".equalsIgnoreCase(riskLevel)) {
+            return 3;
+        }
+        if ("medium".equalsIgnoreCase(riskLevel)) {
+            return 2;
+        }
+        return 1;
+    }
+
+    private boolean containsIgnoreCase(String text, String keyword) {
+        if (isBlank(text) || isBlank(keyword)) {
+            return false;
+        }
+        return text.toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT));
     }
 
     private List<String> buildKeywords(String... rawTexts) {
@@ -1648,7 +1784,7 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         return METRIC_COLLECT_NODES.stream()
             .filter(item -> !existingNodes.contains(item))
             .findFirst()
-            .orElse("custom_" + (existingMetrics.size() + 1));
+            .orElse("");
     }
 
     private String formatDateTime(Date date) {

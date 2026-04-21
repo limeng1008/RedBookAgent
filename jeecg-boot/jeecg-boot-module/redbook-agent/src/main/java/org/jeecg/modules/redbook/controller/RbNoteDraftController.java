@@ -14,6 +14,7 @@ import org.jeecg.modules.redbook.model.req.RedbookAuditRequest;
 import org.jeecg.modules.redbook.model.req.RedbookIdRequest;
 import org.jeecg.modules.redbook.service.IRbNoteDraftService;
 import org.jeecg.modules.redbook.service.IRedbookWorkflowService;
+import org.jeecg.modules.redbook.vo.RedbookDraftRiskCheckVO;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.ModelAndView;
 
@@ -102,6 +103,15 @@ public class RbNoteDraftController extends RedbookCrudController<RbNoteDraft, IR
     public Result<RbNoteDraft> reject(@RequestBody RedbookAuditRequest request) {
         RbNoteDraft draft = service.rejectDraft(request.getId(), request.getAuditOpinion());
         return Result.OK("草稿已退回修改", draft);
+    }
+
+    @PostMapping(value = "/riskCheck")
+    @AutoLog(value = "草稿独立风险检查")
+    @RequiresPermissions("redbook:noteDraft:riskCheck")
+    @Operation(summary = "草稿独立风险检查")
+    public Result<RedbookDraftRiskCheckVO> riskCheck(@RequestBody RedbookIdRequest request) {
+        RedbookDraftRiskCheckVO result = redbookWorkflowService.checkDraftRisk(request.getId());
+        return Result.OK("草稿风险检查完成", result);
     }
 
     @GetMapping(value = "/versions")

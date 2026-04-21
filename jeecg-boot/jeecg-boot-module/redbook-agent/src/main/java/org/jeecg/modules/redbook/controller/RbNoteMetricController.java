@@ -9,6 +9,7 @@ import org.jeecg.common.api.vo.Result;
 import org.jeecg.common.aspect.annotation.AutoLog;
 import org.jeecg.modules.redbook.entity.RbNoteMetric;
 import org.jeecg.modules.redbook.service.IRbNoteMetricService;
+import org.jeecg.modules.redbook.vo.RedbookMetricCompletenessVO;
 import org.jeecgframework.poi.excel.ExcelImportUtil;
 import org.jeecgframework.poi.excel.entity.ImportParams;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +18,7 @@ import org.springframework.web.multipart.MultipartHttpServletRequest;
 import org.springframework.web.servlet.ModelAndView;
 
 import java.io.InputStream;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,32 +37,61 @@ public class RbNoteMetricController extends RedbookCrudController<RbNoteMetric, 
     @AutoLog(value = "新增笔记数据")
     @RequiresPermissions("redbook:noteMetric:add")
     public Result<?> add(@RequestBody RbNoteMetric entity) {
-        return saveEntity(service.normalizeMetric(entity));
+        RbNoteMetric metric = service.normalizeMetric(entity);
+        service.save(metric);
+        service.refreshPublishPlanStatus(metric.getPublishPlanId());
+        return Result.OK("添加成功！", metric);
     }
 
     @RequestMapping(value = "/edit", method = {RequestMethod.PUT, RequestMethod.POST})
     @AutoLog(value = "编辑笔记数据")
     @RequiresPermissions("redbook:noteMetric:edit")
     public Result<?> edit(@RequestBody RbNoteMetric entity) {
-        return updateEntity(service.normalizeMetric(entity));
+        RbNoteMetric oldMetric = service.getById(entity.getId());
+        RbNoteMetric metric = service.normalizeMetric(entity);
+        service.updateById(metric);
+        service.refreshPublishPlanStatuses(Arrays.asList(
+            oldMetric == null ? null : oldMetric.getPublishPlanId(),
+            metric.getPublishPlanId()
+        ));
+        return Result.OK("更新成功！", metric);
     }
 
     @DeleteMapping(value = "/delete")
     @AutoLog(value = "删除笔记数据")
     @RequiresPermissions("redbook:noteMetric:delete")
     public Result<?> delete(@RequestParam(name = "id") String id) {
-        return removeEntity(id);
+        RbNoteMetric metric = service.getById(id);
+        service.removeById(id);
+        service.refreshPublishPlanStatus(metric == null ? null : metric.getPublishPlanId());
+        return Result.OK("删除成功！");
     }
 
     @DeleteMapping(value = "/deleteBatch")
     @RequiresPermissions("redbook:noteMetric:deleteBatch")
     public Result<?> deleteBatch(@RequestParam(name = "ids") String ids) {
-        return removeBatch(ids);
+        List<String> idList = Arrays.stream(ids.split(","))
+            .map(String::trim)
+            .filter(item -> !item.isEmpty())
+            .collect(Collectors.toList());
+        List<RbNoteMetric> metrics = idList.isEmpty() ? List.of() : service.listByIds(idList);
+        service.removeByIds(idList);
+        service.refreshPublishPlanStatuses(metrics.stream()
+            .map(RbNoteMetric::getPublishPlanId)
+            .collect(Collectors.toList()));
+        return Result.OK("批量删除成功！");
     }
 
     @GetMapping(value = "/queryById")
     public Result<?> queryById(@RequestParam(name = "id") String id) {
         return queryEntityById(id);
+    }
+
+    @GetMapping(value = "/completeness")
+    @Operation(summary = "查询发布计划数据回收完整性")
+    @RequiresPermissions("redbook:noteMetric:completeness")
+    public Result<RedbookMetricCompletenessVO> completeness(@RequestParam(name = "publishPlanId") String publishPlanId) {
+        return Result.OK(service.getMetricCompleteness(publishPlanId));
     }
 
     @RequestMapping(value = "/exportXls")
@@ -91,6 +122,9 @@ public class RbNoteMetricController extends RedbookCrudController<RbNoteMetric, 
                     .collect(Collectors.toList());
                 if (!normalizedMetrics.isEmpty()) {
                     service.saveBatch(normalizedMetrics);
+                    service.refreshPublishPlanStatuses(normalizedMetrics.stream()
+                        .map(RbNoteMetric::getPublishPlanId)
+                        .collect(Collectors.toList()));
                 }
                 total += normalizedMetrics.size();
             } catch (Exception e) {
