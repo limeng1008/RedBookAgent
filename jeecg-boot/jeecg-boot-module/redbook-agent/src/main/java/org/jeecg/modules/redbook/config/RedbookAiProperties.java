@@ -25,5 +25,10 @@ public class RedbookAiProperties {
 
     private Integer timeoutSeconds = 60;
 
+    /**
+     * 远程 AI 失败后的额外重试次数，不含首次请求。
+     */
+    private Integer retryTimes = 1;
+
     private String userPrefix = "redbook-agent";
 }

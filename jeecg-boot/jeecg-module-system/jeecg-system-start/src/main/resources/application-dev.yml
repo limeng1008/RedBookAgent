@@ -269,6 +269,7 @@ redbook:
     base-url:
     api-key:
     timeout-seconds: 60
+    retry-times: 1
     user-prefix: redbook-agent
     secretId: ??
     secretKey: ??

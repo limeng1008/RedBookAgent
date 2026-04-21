@@ -17,6 +17,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 
 import jakarta.annotation.Resource;
@@ -29,6 +31,16 @@ import java.util.Map;
 @Slf4j
 @Service
 public class RedbookAiServiceImpl implements IRedbookAiService {
+    private static final String ERROR_TYPE_CONFIG = "config_error";
+    private static final String ERROR_TYPE_TEMPLATE = "template_error";
+    private static final String ERROR_TYPE_SCHEMA = "schema_error";
+    private static final String ERROR_TYPE_AUTH = "auth_error";
+    private static final String ERROR_TYPE_REQUEST = "request_error";
+    private static final String ERROR_TYPE_RATE_LIMIT = "rate_limit";
+    private static final String ERROR_TYPE_UPSTREAM = "upstream_error";
+    private static final String ERROR_TYPE_NETWORK = "network_error";
+    private static final String ERROR_TYPE_UNKNOWN = "unknown_error";
+
     @Resource
     private RedbookAiProperties redbookAiProperties;
 
@@ -51,44 +63,131 @@ public class RedbookAiServiceImpl implements IRedbookAiService {
             .last("limit 1")
             .one();
         if (template == null) {
-            return result.setErrorMessage("未找到已启用的提示词模板：" + templateCode);
+            return result
+                .setErrorType(ERROR_TYPE_TEMPLATE)
+                .setErrorMessage("未找到已启用的提示词模板：" + templateCode);
         }
 
         String provider = resolveProvider(template.getModelProvider());
         result.setProvider(provider);
         if (!redbookAiProperties.isEnabled()) {
-            return result.setErrorMessage("redbook.ai.enabled=false，已使用本地降级流程");
+            return result
+                .setErrorType(ERROR_TYPE_CONFIG)
+                .setErrorMessage("redbook.ai.enabled=false，已使用本地降级流程");
         }
         if (RedbookPromptTemplateConstant.PROVIDER_LOCAL.equals(provider)) {
-            return result.setErrorMessage("未配置可用的 AI 提供方，已使用本地降级流程");
+            return result
+                .setErrorType(ERROR_TYPE_CONFIG)
+                .setErrorMessage("未配置可用的 AI 提供方，已使用本地降级流程");
         }
         if (isBlank(redbookAiProperties.getBaseUrl()) || isBlank(redbookAiProperties.getApiKey())) {
-            return result.setErrorMessage("AI 基础配置缺失，请检查 redbook.ai.base-url / api-key");
+            return result
+                .setErrorType(ERROR_TYPE_CONFIG)
+                .setErrorMessage("AI 基础配置缺失，请检查 redbook.ai.base-url / api-key");
         }
 
-        try {
-            Map<String, Object> response;
-            if (RedbookPromptTemplateConstant.PROVIDER_DIFY.equals(provider)) {
-                response = callDify(template, payload);
-                result.setOutputs(extractDifyOutputs(response));
-            } else if (RedbookPromptTemplateConstant.PROVIDER_FASTGPT.equals(provider)) {
-                response = callFastGpt(template, payload);
-                result.setOutputs(extractFastGptOutputs(response));
-            } else {
-                return result.setErrorMessage("暂不支持的 AI 提供方：" + provider);
+        int maxAttempts = Math.max(1, defaultInt(redbookAiProperties.getRetryTimes()) + 1);
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            result.setAttemptCount(attempt);
+            try {
+                Map<String, Object> response;
+                if (RedbookPromptTemplateConstant.PROVIDER_DIFY.equals(provider)) {
+                    response = callDify(template, payload);
+                    result.setOutputs(extractDifyOutputs(response));
+                } else if (RedbookPromptTemplateConstant.PROVIDER_FASTGPT.equals(provider)) {
+                    response = callFastGpt(template, payload);
+                    result.setOutputs(extractFastGptOutputs(response));
+                } else {
+                    return result
+                        .setErrorType(ERROR_TYPE_CONFIG)
+                        .setErrorMessage("暂不支持的 AI 提供方：" + provider);
+                }
+                result.setRawResult(toJson(response));
+                result.setRemoteUsed(true);
+                validateOutputs(template, result);
+                if (result.getOutputs().isEmpty()) {
+                    result.setSuccess(false);
+                    result.setErrorType(ERROR_TYPE_SCHEMA);
+                    result.setErrorMessage(mergeErrorMessage(result.getErrorMessage(), "AI 已返回结果，但未解析出结构化字段"));
+                } else if (!result.isSchemaValid()) {
+                    result.setSuccess(false);
+                    result.setErrorType(ERROR_TYPE_SCHEMA);
+                    result.setErrorMessage(mergeErrorMessage(result.getErrorMessage(), "AI 输出结构校验失败"));
+                } else {
+                    result.setSuccess(true);
+                }
+                return result;
+            } catch (Exception ex) {
+                String errorType = classifyErrorType(ex);
+                result.setRemoteUsed(true);
+                result.setErrorType(errorType);
+                result.setErrorMessage(buildRemoteErrorMessage(ex, errorType));
+                result.setRawResult(buildRemoteErrorRaw(ex, provider, templateCode, attempt));
+                boolean retryable = isRetryable(errorType);
+                if (retryable && attempt < maxAttempts) {
+                    log.warn("Redbook AI workflow execution failed, templateCode={}, provider={}, attempt={}, retrying, errorType={}",
+                        templateCode, provider, attempt, errorType, ex);
+                    continue;
+                }
+                log.warn("Redbook AI workflow execution failed, templateCode={}, provider={}, attempt={}, errorType={}",
+                    templateCode, provider, attempt, errorType, ex);
+                return result;
             }
-            result.setRawResult(toJson(response));
-            result.setRemoteUsed(true);
-            result.setSuccess(!result.getOutputs().isEmpty());
-            if (!result.isSuccess()) {
-                result.setErrorMessage("AI 已返回结果，但未解析出结构化字段");
+        }
+        return result;
+    }
+
+    private void validateOutputs(RbPromptTemplate template, RedbookAiExecutionResult result) {
+        Map<String, Object> schema = parseJsonObject(template.getOutputSchema());
+        if (schema.isEmpty()) {
+            result.setSchemaValid(false);
+            result.setErrorType(ERROR_TYPE_SCHEMA);
+            result.setValidationErrors(List.of("模板 output_schema 为空或不是合法 JSON 对象"));
+            return;
+        }
+        List<String> errors = new ArrayList<>();
+        validateBySchema("$", schema, result.getOutputs(), errors);
+        result.setSchemaValid(errors.isEmpty());
+        result.setValidationErrors(errors);
+    }
+
+    private void validateBySchema(String path, Object schemaNode, Object outputNode, List<String> errors) {
+        if (schemaNode instanceof Map<?, ?> schemaMap) {
+            Map<String, Object> schemaObject = objectMapper.convertValue(schemaMap, new TypeReference<Map<String, Object>>() {});
+            if (!(outputNode instanceof Map<?, ?> outputMap)) {
+                errors.add(path + " 应为对象");
+                return;
             }
-            return result;
-        } catch (Exception ex) {
-            log.warn("Redbook AI workflow execution failed, templateCode={}, provider={}", templateCode, provider, ex);
-            return result
-                .setRemoteUsed(true)
-                .setErrorMessage(firstNonBlank(ex.getMessage(), ex.getClass().getSimpleName()));
+            Map<String, Object> outputObject = objectMapper.convertValue(outputMap, new TypeReference<Map<String, Object>>() {});
+            for (Map.Entry<String, Object> entry : schemaObject.entrySet()) {
+                String key = entry.getKey();
+                if (!outputObject.containsKey(key)) {
+                    errors.add(path + "." + key + " 缺失");
+                    continue;
+                }
+                validateBySchema(path + "." + key, entry.getValue(), outputObject.get(key), errors);
+            }
+            return;
+        }
+        if (schemaNode instanceof List<?> schemaList) {
+            if (outputNode == null) {
+                errors.add(path + " 缺失");
+                return;
+            }
+            if (outputNode instanceof String) {
+                return;
+            }
+            if (!(outputNode instanceof List<?> outputList)) {
+                errors.add(path + " 应为数组");
+                return;
+            }
+            if (!schemaList.isEmpty() && !outputList.isEmpty()) {
+                validateBySchema(path + "[0]", schemaList.get(0), outputList.get(0), errors);
+            }
+            return;
+        }
+        if (outputNode == null) {
+            errors.add(path + " 缺失");
         }
     }
 
@@ -329,5 +428,73 @@ public class RedbookAiServiceImpl implements IRedbookAiService {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private String mergeErrorMessage(String origin, String next) {
+        if (isBlank(origin)) {
+            return next;
+        }
+        if (isBlank(next) || origin.contains(next)) {
+            return origin;
+        }
+        return origin + "；" + next;
+    }
+
+    private int defaultInt(Integer value) {
+        return value == null ? 0 : Math.max(value, 0);
+    }
+
+    private String classifyErrorType(Exception ex) {
+        if (ex instanceof RestClientResponseException responseException) {
+            int statusCode = responseException.getStatusCode().value();
+            if (statusCode == 401 || statusCode == 403) {
+                return ERROR_TYPE_AUTH;
+            }
+            if (statusCode == 429) {
+                return ERROR_TYPE_RATE_LIMIT;
+            }
+            if (statusCode >= 400 && statusCode < 500) {
+                return ERROR_TYPE_REQUEST;
+            }
+            if (statusCode >= 500) {
+                return ERROR_TYPE_UPSTREAM;
+            }
+        }
+        if (ex instanceof ResourceAccessException) {
+            return ERROR_TYPE_NETWORK;
+        }
+        return ERROR_TYPE_UNKNOWN;
+    }
+
+    private boolean isRetryable(String errorType) {
+        return ERROR_TYPE_NETWORK.equals(errorType)
+            || ERROR_TYPE_RATE_LIMIT.equals(errorType)
+            || ERROR_TYPE_UPSTREAM.equals(errorType);
+    }
+
+    private String buildRemoteErrorMessage(Exception ex, String errorType) {
+        String detail = firstNonBlank(ex.getMessage(), ex.getClass().getSimpleName());
+        return switch (errorType) {
+            case ERROR_TYPE_AUTH -> "AI 鉴权失败，请检查 api-key 或服务权限：" + detail;
+            case ERROR_TYPE_RATE_LIMIT -> "AI 调用被限流，稍后可重试：" + detail;
+            case ERROR_TYPE_REQUEST -> "AI 请求参数非法或模板配置不兼容：" + detail;
+            case ERROR_TYPE_UPSTREAM -> "AI 服务端返回异常：" + detail;
+            case ERROR_TYPE_NETWORK -> "AI 网络连接或超时异常：" + detail;
+            default -> "AI 调用异常：" + detail;
+        };
+    }
+
+    private String buildRemoteErrorRaw(Exception ex, String provider, String templateCode, int attempt) {
+        Map<String, Object> raw = new LinkedHashMap<>();
+        raw.put("provider", provider);
+        raw.put("template_code", templateCode);
+        raw.put("attempt", attempt);
+        raw.put("exception", ex.getClass().getName());
+        raw.put("message", firstNonBlank(ex.getMessage(), ex.getClass().getSimpleName()));
+        if (ex instanceof RestClientResponseException responseException) {
+            raw.put("status_code", responseException.getStatusCode().value());
+            raw.put("response_body", responseException.getResponseBodyAsString());
+        }
+        return toJson(raw);
     }
 }

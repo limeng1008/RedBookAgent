@@ -211,7 +211,7 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         draft.setAuditStatus(RedbookStatusConstant.AUDIT_PENDING);
         draft.setAuditOpinion("待人工审核，重点确认标题力度与结尾转化动作。");
         draft.setStatus(RedbookStatusConstant.DRAFT_PENDING_REVIEW);
-        noteDraftService.saveOrUpdateDraft(draft, "ai_generate", "AI 生成草稿");
+        draft = noteDraftService.saveOrUpdateDraft(draft, "ai_generate", "AI 生成草稿");
 
         analysis.setStatus(RedbookStatusConstant.ANALYSIS_ADOPTED);
         hotspotAnalysisService.updateById(analysis);
@@ -273,10 +273,10 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
 
         if (!isBlank(publishPlan.getDraftId())) {
             RbNoteDraft draft = noteDraftService.getById(publishPlan.getDraftId());
-            if (draft != null) {
+            if (draft != null && !RedbookStatusConstant.DRAFT_PUBLISHED.equals(draft.getStatus())) {
                 draft.setStatus(RedbookStatusConstant.DRAFT_PUBLISHED);
                 draft.setAuditStatus(RedbookStatusConstant.AUDIT_APPROVED);
-                noteDraftService.updateById(draft);
+                noteDraftService.saveOrUpdateDraft(draft, "published", "发布计划标记已发布");
             }
         }
         return publishPlan;
@@ -408,6 +408,39 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public RbReviewReport generateReviewReportByScope(RbReviewReport report) {
+        if (report == null) {
+            throw new IllegalArgumentException("复盘报告请求不能为空");
+        }
+        RbReviewReport target = report;
+        if (!isBlank(report.getId())) {
+            RbReviewReport existing = reviewReportService.getById(report.getId());
+            if (existing == null) {
+                throw new IllegalArgumentException("未找到对应复盘报告");
+            }
+            existing.setReportName(firstNonBlank(report.getReportName(), existing.getReportName()));
+            existing.setTrackId(firstNonBlank(report.getTrackId(), existing.getTrackId()));
+            existing.setAccountId(firstNonBlank(report.getAccountId(), existing.getAccountId()));
+            existing.setPeriodStart(firstNonNull(report.getPeriodStart(), existing.getPeriodStart()));
+            existing.setPeriodEnd(firstNonNull(report.getPeriodEnd(), existing.getPeriodEnd()));
+            existing.setStatus(RedbookStatusConstant.REVIEW_DRAFT);
+            target = existing;
+            reviewReportService.updateById(target);
+        } else {
+            target.setStatus(RedbookStatusConstant.REVIEW_DRAFT);
+            reviewReportService.save(target);
+        }
+        if (!isBlank(target.getTrackId()) && trackService.getById(target.getTrackId()) == null) {
+            throw new IllegalArgumentException("赛道ID不存在");
+        }
+        if (!isBlank(target.getAccountId()) && accountService.getById(target.getAccountId()) == null) {
+            throw new IllegalArgumentException("账号ID不存在");
+        }
+        return generateReviewReport(target.getId());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public List<RbHotspot> createHotspotsFromReviewReport(String reviewReportId) {
         RbReviewReport report = reviewReportService.getById(reviewReportId);
         if (report == null) {
@@ -455,10 +488,13 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
 
     @Override
     public RedbookReviewDashboardVO getReviewDashboard() {
-        List<RbPublishPlan> publishedPlans = publishPlanService.list().stream()
-            .filter(item -> isPublishedStatus(item.getPublishStatus()))
-            .collect(Collectors.toList());
-        List<RbNoteMetric> metrics = noteMetricService.list();
+        return getReviewDashboard(null, null, null, null);
+    }
+
+    @Override
+    public RedbookReviewDashboardVO getReviewDashboard(Date periodStart, Date periodEnd, String trackId, String accountId) {
+        Date scopeStart = periodStart == null ? null : startOfDay(periodStart);
+        Date scopeEnd = periodEnd == null ? null : endOfDay(periodEnd);
         Map<String, RbNoteDraft> draftMap = noteDraftService.list().stream()
             .filter(item -> !isBlank(item.getId()))
             .collect(Collectors.toMap(RbNoteDraft::getId, Function.identity(), (left, right) -> left));
@@ -469,12 +505,19 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
             .filter(item -> !isBlank(item.getId()))
             .collect(Collectors.toMap(RbAccount::getId, Function.identity(), (left, right) -> left));
 
-        List<String> publishPlanIds = publishedPlans.stream()
+        List<RbPublishPlan> publishedPlans = publishPlanService.list().stream()
+            .filter(item -> isPublishedStatus(item.getPublishStatus()))
+            .filter(item -> matchDashboardScope(item, draftMap.get(item.getDraftId()), scopeStart, scopeEnd, trackId, accountId))
+            .collect(Collectors.toList());
+        LinkedHashSet<String> publishPlanIds = publishedPlans.stream()
             .map(RbPublishPlan::getId)
             .filter(item -> !isBlank(item))
-            .collect(Collectors.toList());
-        Map<String, List<RbNoteMetric>> metricGroup = metrics.stream()
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<RbNoteMetric> metrics = noteMetricService.list().stream()
             .filter(item -> !isBlank(item.getPublishPlanId()) && publishPlanIds.contains(item.getPublishPlanId()))
+            .collect(Collectors.toList());
+
+        Map<String, List<RbNoteMetric>> metricGroup = metrics.stream()
             .collect(Collectors.groupingBy(RbNoteMetric::getPublishPlanId));
         Map<String, RbNoteMetric> latestMetricMap = new LinkedHashMap<>();
         metricGroup.forEach((publishPlanId, values) -> latestMetricMap.put(publishPlanId, pickLatestMetric(values)));
@@ -487,13 +530,18 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
             .map(plan -> toReviewRankItem(plan, latestMetricMap.get(plan.getId()), draftMap, trackMap, accountMap))
             .collect(Collectors.toList());
 
-        RbReviewReport latestReport = pickLatestReviewReport();
+        List<RbReviewReport> matchedReports = reviewReportService.list().stream()
+            .filter(report -> matchDashboardReportScope(report, scopeStart, scopeEnd, trackId, accountId))
+            .collect(Collectors.toList());
+        RbReviewReport latestReport = matchedReports.stream()
+            .max(Comparator.comparing(report -> firstNonNull(report.getUpdateTime(), report.getCreateTime()), Comparator.nullsLast(Date::compareTo)))
+            .orElse(null);
         RedbookReviewDashboardVO dashboard = new RedbookReviewDashboardVO();
         dashboard.setPublishCount((long) publishedPlans.size());
         dashboard.setCollectedPublishCount((long) latestMetricMap.size());
         dashboard.setUncollectedPublishCount(Math.max(0L, publishedPlans.size() - latestMetricMap.size()));
         dashboard.setMetricCount((long) metrics.size());
-        dashboard.setReviewReportCount(reviewReportService.count());
+        dashboard.setReviewReportCount((long) matchedReports.size());
         dashboard.setAvgViews(averageLongValues(latestMetrics.stream().map(RbNoteMetric::getViews).collect(Collectors.toList()), 1));
         dashboard.setAvgInteractionRate(average(latestMetrics.stream().map(RbNoteMetric::getInteractionRate).collect(Collectors.toList()), 4));
         dashboard.setAvgCollectRate(average(latestMetrics.stream().map(RbNoteMetric::getCollectRate).collect(Collectors.toList()), 4));
@@ -1170,6 +1218,52 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
             .orElse(null);
     }
 
+    private boolean matchDashboardScope(
+        RbPublishPlan publishPlan,
+        RbNoteDraft draft,
+        Date periodStart,
+        Date periodEnd,
+        String trackId,
+        String accountId
+    ) {
+        Date publishTime = resolvePublishTime(publishPlan);
+        if (!matchesOptionalPeriod(publishTime, periodStart, periodEnd)) {
+            return false;
+        }
+        if (!isBlank(trackId)) {
+            String currentTrackId = draft == null ? "" : draft.getTrackId();
+            if (!trackId.equals(currentTrackId)) {
+                return false;
+            }
+        }
+        if (!isBlank(accountId)) {
+            String currentAccountId = firstNonBlank(publishPlan.getAccountId(), draft == null ? null : draft.getAccountId());
+            if (!accountId.equals(currentAccountId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean matchDashboardReportScope(
+        RbReviewReport report,
+        Date periodStart,
+        Date periodEnd,
+        String trackId,
+        String accountId
+    ) {
+        if (report == null) {
+            return false;
+        }
+        if (!isBlank(trackId) && !isBlank(report.getTrackId()) && !trackId.equals(report.getTrackId())) {
+            return false;
+        }
+        if (!isBlank(accountId) && !isBlank(report.getAccountId()) && !accountId.equals(report.getAccountId())) {
+            return false;
+        }
+        return overlapsOptionalPeriod(periodStart, periodEnd, report.getPeriodStart(), report.getPeriodEnd());
+    }
+
     private List<String> splitSuggestionLines(String... texts) {
         List<String> values = new ArrayList<>();
         for (String text : texts) {
@@ -1256,6 +1350,46 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
             return false;
         }
         return !target.before(start) && !target.after(end);
+    }
+
+    private boolean matchesOptionalPeriod(Date target, Date start, Date end) {
+        if (start == null && end == null) {
+            return true;
+        }
+        if (target == null) {
+            return false;
+        }
+        if (start != null && target.before(start)) {
+            return false;
+        }
+        if (end != null && target.after(end)) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean overlapsOptionalPeriod(Date filterStart, Date filterEnd, Date valueStart, Date valueEnd) {
+        if (filterStart == null && filterEnd == null) {
+            return true;
+        }
+        Date normalizedValueStart = valueStart == null ? valueEnd : valueStart;
+        Date normalizedValueEnd = valueEnd == null ? valueStart : valueEnd;
+        if (normalizedValueStart == null && normalizedValueEnd == null) {
+            return false;
+        }
+        if (normalizedValueStart == null) {
+            normalizedValueStart = normalizedValueEnd;
+        }
+        if (normalizedValueEnd == null) {
+            normalizedValueEnd = normalizedValueStart;
+        }
+        if (filterStart != null && normalizedValueEnd.before(filterStart)) {
+            return false;
+        }
+        if (filterEnd != null && normalizedValueStart.after(filterEnd)) {
+            return false;
+        }
+        return true;
     }
 
     private Date startOfDay(Date date) {
@@ -1373,8 +1507,17 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
     private String buildWorkflowRawResult(RedbookAiExecutionResult aiResult, Map<String, Object> context, Map<String, Object> fallback) {
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("provider", aiResult == null ? RedbookPromptTemplateConstant.PROVIDER_LOCAL : aiResult.getProvider());
+        raw.put("template_code", aiResult == null ? "" : aiResult.getTemplateCode());
         raw.put("remote_used", aiResult != null && aiResult.isRemoteUsed());
         raw.put("success", aiResult != null && aiResult.isSuccess());
+        raw.put("attempt_count", aiResult == null ? 0 : aiResult.getAttemptCount());
+        if (aiResult != null && !isBlank(aiResult.getErrorType())) {
+            raw.put("error_type", aiResult.getErrorType());
+        }
+        raw.put("schema_valid", aiResult == null || aiResult.isSchemaValid());
+        if (aiResult != null && aiResult.getValidationErrors() != null && !aiResult.getValidationErrors().isEmpty()) {
+            raw.put("validation_errors", aiResult.getValidationErrors());
+        }
         if (aiResult != null && !isBlank(aiResult.getErrorMessage())) {
             raw.put("error_message", aiResult.getErrorMessage());
         }

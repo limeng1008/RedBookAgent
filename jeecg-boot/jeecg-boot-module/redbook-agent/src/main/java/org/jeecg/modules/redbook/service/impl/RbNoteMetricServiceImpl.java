@@ -14,11 +14,12 @@ import java.util.Date;
 public class RbNoteMetricServiceImpl extends ServiceImpl<RbNoteMetricMapper, RbNoteMetric> implements IRbNoteMetricService {
     @Override
     public RbNoteMetric normalizeMetric(RbNoteMetric entity) {
-        long views = defaultLong(entity.getViews());
-        long likes = defaultLong(entity.getLikes());
-        long collects = defaultLong(entity.getCollects());
-        long comments = defaultLong(entity.getComments());
-        long shares = defaultLong(entity.getShares());
+        normalizeCountFields(entity);
+        long views = entity.getViews();
+        long likes = entity.getLikes();
+        long collects = entity.getCollects();
+        long comments = entity.getComments();
+        long shares = entity.getShares();
 
         if (entity.getCollectTime() == null) {
             entity.setCollectTime(new Date());
@@ -40,5 +41,18 @@ public class RbNoteMetricServiceImpl extends ServiceImpl<RbNoteMetricMapper, RbN
 
     private long defaultLong(Long value) {
         return value == null ? 0L : value;
+    }
+
+    private void normalizeCountFields(RbNoteMetric entity) {
+        entity.setImpressions(defaultLong(entity.getImpressions()));
+        entity.setViews(defaultLong(entity.getViews()));
+        entity.setLikes(defaultLong(entity.getLikes()));
+        entity.setCollects(defaultLong(entity.getCollects()));
+        entity.setComments(defaultLong(entity.getComments()));
+        entity.setShares(defaultLong(entity.getShares()));
+        entity.setFollowers(defaultLong(entity.getFollowers()));
+        entity.setMessages(defaultLong(entity.getMessages()));
+        entity.setLeads(defaultLong(entity.getLeads()));
+        entity.setConversions(defaultLong(entity.getConversions()));
     }
 }

@@ -44,6 +44,30 @@ mysql -uroot -proot < jeecg-boot/db/redbook-agent-schema.sql
 
 注意：`redbook-agent-schema.sql` 现在除了创建 `rb_*` 业务表，也会同步初始化 Jeecg 的 `sys_permission` 菜单，并默认授权给 `admin` / `vue3` 角色。导入后如果左侧还没出现“小红书运营”，请先退出重新登录，或刷新前端页面。
 
+如需快速演示完整闭环，可继续导入样例数据：
+
+```bash
+mysql -uroot -proot < jeecg-boot/db/redbook-agent-demo-data.sql
+```
+
+说明：
+
+- `redbook-agent-demo-data.sql` 会补充 4 个赛道、4 个账号、50 条热点、30 条分析、20 条草稿、12 条发布计划、24 条数据回收、3 条复盘报告。
+- 脚本按固定 ID 使用 `ON DUPLICATE KEY UPDATE` 写入，可重复执行，适合本地联调和演示环境重置。
+
+导入完成后，可执行只读冒烟检查：
+
+```bash
+mysql -uroot -proot < jeecg-boot/db/redbook-agent-smoke-check.sql
+```
+
+V1 A 角色后端补充：
+
+- 已包含 `rb_note_draft_version` 草稿版本表。
+- 已初始化 RedBook 状态字典，包括热点、分析、草稿、审核、发布、复盘、风险等级、采集节点和内容类型。
+- 数据回收导入会统一重算互动率、收藏率、评论率，并把空数值归零。
+- 已初始化 RedBook 按钮权限，覆盖导入 / 导出、AI 动作、审核、排期流转、复盘生成等核心操作。
+
 ## 4. 启动后端
 
 ```bash
@@ -101,6 +125,37 @@ GET    /exportXls
 POST   /importExcel
 ```
 
+当前额外动作接口：
+
+```text
+/redbook/hotspot/analyze
+/redbook/hotspotAnalysis/generateDraft
+/redbook/noteDraft/approve
+/redbook/noteDraft/reject
+/redbook/noteDraft/versions
+/redbook/noteDraft/restoreVersion
+/redbook/noteDraft/createPublishPlan
+/redbook/publishPlan/markPublished
+/redbook/publishPlan/createMetric
+/redbook/publishPlan/delay
+/redbook/publishPlan/cancel
+/redbook/publishPlan/restorePending
+/redbook/publishPlan/updateNoteUrl
+/redbook/reviewReport/generateScoped
+```
+
+工作台复盘看板支持可选筛选参数：
+
+```text
+GET /redbook/workbench/reviewDashboard?periodStart=2026-04-01&periodEnd=2026-04-21&trackId=xxx&accountId=xxx
+```
+
+说明：
+
+- `periodStart` / `periodEnd` 格式为 `yyyy-MM-dd`
+- 四个参数都不是必填，不传时返回全量复盘看板
+- 传入筛选条件后，会同步收敛发布统计、数据回收统计和复盘报告建议
+
 ## 7. V1 边界
 
 当前实现保持 V1 的半自动闭环边界：
@@ -130,6 +185,7 @@ redbook:
     base-url:
     api-key:
     timeout-seconds: 60
+    retry-times: 1
     user-prefix: redbook-agent
 ```
 
@@ -138,6 +194,7 @@ redbook:
 - `provider=local`：只走本地降级逻辑，适合先联调页面和数据库闭环。
 - `provider=dify`：请求地址默认按 `.../v1/workflows/run` 组装。
 - `provider=fastgpt`：请求地址默认按 `.../api/v1/chat/completions` 组装。
+- `retry-times`：远程 AI 失败后的额外重试次数，不含首次请求。
 - `base-url` 和 `api-key` 为空时，不会调用远程 AI，会自动回退到本地模板结果。
 
 提示词模板表：
@@ -178,9 +235,16 @@ rb_prompt_template
 - 工作台概览
 - 热点 -> 分析 -> 草稿 -> 发布计划 -> 已发布 的闭环动作
 - 笔记草稿一键复制发布文案
+- 草稿审核通过 / 退回接口
+- 草稿新增、编辑、审核、恢复、发布状态版本留痕
 - 发布日历
+- 发布计划延期 / 取消 / 恢复待发布 / 补录链接接口
 - 发布计划一键生成 2h / 24h / 72h / 7d 数据回收记录
 - 数据回收指标自动计算
+- 热点导入预校验（赛道、标题、链接重复检查）
+- AI 输出按模板 `output_schema` 做结构校验，失败信息写入 `rawResult`
+- AI 调用会记录 `error_type`、`attempt_count`，并对网络超时 / 限流 / 服务端异常自动重试
+- 复盘报告支持按时间 / 赛道 / 账号范围直接生成
 - 复盘看板：总览、高低表现榜、赛道/账号/发布时间表现
 - 复盘报告生成入口
 - 复盘报告下一轮选题建议可回流到热点池
@@ -190,3 +254,9 @@ rb_prompt_template
 
 - JeecgBoot 当前项目运行在 `BACK` 菜单模式，左侧菜单来自数据库 `sys_permission`。
 - 如果重新导入 `redbook-agent-schema.sql` 后仍未看到“小红书运营”，请退出重登或刷新前端。
+
+## 10. 相关文档
+
+- 接口契约：`doc/v1-backend-api-contract.md`
+- 双人分工：`doc/v1-dual-dev-responsibility.md`
+- 部署与试运营：`doc/v1-deploy-and-trial-checklist.md`

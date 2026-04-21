@@ -373,8 +373,16 @@ V1 导入约定：
 | --- | --- |
 | `trackId` | 必填，必须存在 |
 | `title` | 必填 |
-| `originalUrl` | 建议唯一；为空时允许导入 |
+| `title` | 文件内和库内都做重复检查 |
+| `originalUrl` | 非空时文件内和库内都做重复检查 |
 | `status` | 为空默认 `pending_analysis` |
+
+导入失败时返回行级错误，例如：
+
+```text
+第3行: 赛道ID不存在
+第7行: 原文链接已存在
+```
 
 ### 3.2 选题分析接口
 
@@ -856,9 +864,78 @@ pending -> delayed -> pending
 pending -> canceled
 ```
 
-V1 P0 已覆盖 `pending -> published -> data_collected` 主路径。延期、取消、恢复待发布属于 P1 增强接口，前端页面可以先通过 `/edit` 修改 `publishStatus` 和 `plannedPublishTime` 兼容实现。
+### 5.10 发布计划延期
 
-### 5.10 导入导出发布计划
+```http
+POST /redbook/publishPlan/delay
+```
+
+请求体：
+
+```json
+{
+  "id": "publish_plan_001",
+  "plannedPublishTime": "2026-04-23 20:30:00",
+  "remark": "临时改到明晚"
+}
+```
+
+返回 `result.publishStatus = delayed`。
+
+### 5.11 发布计划取消
+
+```http
+POST /redbook/publishPlan/cancel
+```
+
+请求体：
+
+```json
+{
+  "id": "publish_plan_001",
+  "remark": "本次选题取消"
+}
+```
+
+返回 `result.publishStatus = canceled`。
+
+### 5.12 发布计划恢复待发布
+
+```http
+POST /redbook/publishPlan/restorePending
+```
+
+请求体：
+
+```json
+{
+  "id": "publish_plan_001",
+  "plannedPublishTime": "2026-04-24 20:30:00",
+  "remark": "调整后重新排期"
+}
+```
+
+返回 `result.publishStatus = pending`。
+
+### 5.13 补录笔记链接
+
+```http
+POST /redbook/publishPlan/updateNoteUrl
+```
+
+请求体：
+
+```json
+{
+  "id": "publish_plan_001",
+  "noteUrl": "https://www.xiaohongshu.com/explore/xxxx",
+  "remark": "补录真实笔记链接"
+}
+```
+
+返回 `result.noteUrl` 为最新链接。
+
+### 5.14 导入导出发布计划
 
 ```http
 GET  /redbook/publishPlan/exportXls
@@ -874,7 +951,58 @@ POST /redbook/publishPlan/importExcel
 | `plannedPublishTime` | 必填 |
 | `publishStatus` | 为空默认 `pending` |
 
-## 6. 前后端联调清单
+## 6. 工作台与复盘看板
+
+### 6.1 获取复盘看板
+
+```http
+GET /redbook/workbench/reviewDashboard
+```
+
+可选查询参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `periodStart` | string | 否 | 开始日期，格式 `yyyy-MM-dd` |
+| `periodEnd` | string | 否 | 结束日期，格式 `yyyy-MM-dd` |
+| `trackId` | string | 否 | 按赛道筛选 |
+| `accountId` | string | 否 | 按账号筛选 |
+
+返回字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `publishCount` | number | 筛选范围内已发布计划数 |
+| `collectedPublishCount` | number | 已有回收数据的发布计划数 |
+| `uncollectedPublishCount` | number | 尚未回收数据的发布计划数 |
+| `metricCount` | number | 命中筛选条件的数据回收记录总数 |
+| `reviewReportCount` | number | 命中筛选条件的复盘报告数 |
+| `avgViews` | number | 最新回收节点的平均阅读/播放量 |
+| `avgInteractionRate` | number | 最新回收节点的平均互动率 |
+| `avgCollectRate` | number | 最新回收节点的平均收藏率 |
+| `avgCommentRate` | number | 最新回收节点的平均评论率 |
+| `latestReportName` | string | 最近一份匹配复盘报告名称 |
+| `latestSummary` | string | 最近一份匹配复盘报告摘要 |
+| `highPerformList` | array | 高表现笔记榜 |
+| `lowPerformList` | array | 低表现笔记榜 |
+| `trackBoard` | array | 赛道维度表现榜 |
+| `accountBoard` | array | 账号维度表现榜 |
+| `publishWindowBoard` | array | 发布时间段表现榜 |
+| `nextTopicSuggestions` | array | 下一轮选题建议 |
+| `nextTitleSuggestions` | array | 下一轮标题建议 |
+| `nextPublishSuggestions` | array | 下一轮发布时间建议 |
+
+业务规则：
+
+| 场景 | 规则 |
+| --- | --- |
+| 不传筛选参数 | 返回全量复盘看板 |
+| 传时间范围 | 仅统计命中发布时间区间的已发布计划 |
+| 传 `trackId` / `accountId` | 仅统计命中赛道 / 账号的发布数据 |
+| 存在匹配复盘报告 | 下一轮建议优先取最近一份匹配报告 |
+| 无匹配复盘报告 | 返回内置兜底建议 |
+
+## 7. 前后端联调清单
 
 | 流程 | 后端接口 | 前端预期 |
 | --- | --- | --- |
@@ -887,9 +1015,14 @@ POST /redbook/publishPlan/importExcel
 | 草稿版本 | `GET /redbook/noteDraft/versions` | 展示版本列表，可恢复 |
 | 加入发布计划 | `POST /redbook/noteDraft/createPublishPlan` | 生成日历事件 |
 | 发布日历 | `GET /redbook/publishPlan/list` | 按计划发布时间渲染 |
+| 发布改期 | `POST /redbook/publishPlan/delay` | 改成延期状态并更新排期时间 |
+| 恢复待发布 | `POST /redbook/publishPlan/restorePending` | 延期/取消后重新进入待发布 |
+| 取消排期 | `POST /redbook/publishPlan/cancel` | 排期取消 |
+| 补录链接 | `POST /redbook/publishPlan/updateNoteUrl` | 保存真实笔记链接 |
 | 标记已发布 | `POST /redbook/publishPlan/markPublished` | 更新发布状态和草稿状态 |
+| 复盘看板筛选 | `GET /redbook/workbench/reviewDashboard` | 支持按时间 / 赛道 / 账号刷新看板 |
 
-## 7. V1 不支持能力
+## 8. V1 不支持能力
 
 - 不做小红书自动登录。
 - 不做自动发布。
