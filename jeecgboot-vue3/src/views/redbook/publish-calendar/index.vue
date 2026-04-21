@@ -9,6 +9,8 @@
           <a-button @click="backToday">本月</a-button>
         </div>
         <div class="toolbar-actions">
+          <a-input v-model:value="keyword" class="toolbar-keyword" placeholder="搜索草稿标题" allow-clear />
+          <a-select v-model:value="accountFilter" class="account-select" :options="accountOptions" />
           <a-select v-model:value="statusFilter" class="status-select" :options="statusOptions" />
           <a-button preIcon="ant-design:reload-outlined" @click="loadPlans">刷新</a-button>
           <a-button type="primary" preIcon="ant-design:table-outlined" @click="goPublishPlan">列表</a-button>
@@ -34,11 +36,11 @@
                 <a-tag v-if="day.items.length" color="blue">{{ day.items.length }}</a-tag>
               </div>
               <div v-if="day.items.length" class="plan-list">
-                <button v-for="item in day.items" :key="item.id" class="plan-item" type="button" @click="copyPlan(item)">
+                <button v-for="item in day.items" :key="item.id" class="plan-item" type="button" @click="openPlan(item)">
                   <div class="plan-time">{{ formatTime(item) }}</div>
                   <div class="plan-main">
-                    <div class="plan-title">{{ item.draftId || '未绑定草稿' }}</div>
-                    <div class="plan-meta">{{ item.accountId || '未绑定账号' }}</div>
+                    <div class="plan-title">{{ planTitle(item) }}</div>
+                    <div class="plan-meta">{{ planAccount(item) }}</div>
                   </div>
                   <a-tag :color="statusMeta(item.publishStatus).color">{{ statusMeta(item.publishStatus).label }}</a-tag>
                 </button>
@@ -51,16 +53,19 @@
 
       <a-empty v-if="!loading && filteredPlans.length === 0" class="empty-state" description="当前月份暂无发布排期" />
     </div>
+    <PublishPlanCalendarDrawer @register="registerPlanDrawer" @success="handleDrawerSuccess" />
   </PageWrapper>
 </template>
 
 <script lang="ts" setup>
   import dayjs, { Dayjs } from 'dayjs';
-  import { computed, onMounted, ref } from 'vue';
+  import { computed, onMounted, ref, watch } from 'vue';
   import { useRouter } from 'vue-router';
+  import { useDrawer } from '/@/components/Drawer';
   import { PageWrapper } from '/@/components/Page';
-  import { copyTextToClipboard } from '/@/hooks/web/useCopyToClipboard';
   import { useMessage } from '/@/hooks/web/useMessage';
+  import { ensureReferences, getReferenceLabel, getReferenceOptions, getStatusMeta, getStatusOptions } from '../crud/redbook.shared';
+  import PublishPlanCalendarDrawer from './PublishPlanCalendarDrawer.vue';
   import { listPublishPlans, type RedbookPublishPlanItem } from './publish-calendar.api';
 
   interface CalendarDay {
@@ -73,18 +78,16 @@
 
   const router = useRouter();
   const { createMessage } = useMessage();
+  const [registerPlanDrawer, { openDrawer: openPlanDrawer }] = useDrawer();
   const loading = ref(false);
   const currentMonth = ref(dayjs().startOf('month'));
   const statusFilter = ref('all');
+  const accountFilter = ref('all');
+  const keyword = ref('');
   const plans = ref<RedbookPublishPlanItem[]>([]);
   const weeks = ['日', '一', '二', '三', '四', '五', '六'];
-  const statusOptions = [
-    { label: '全部状态', value: 'all' },
-    { label: '待发布', value: 'pending' },
-    { label: '已发布', value: 'published' },
-    { label: '延期', value: 'delayed' },
-    { label: '取消', value: 'canceled' },
-  ];
+  const statusOptions = [{ label: '全部状态', value: 'all' }, ...getStatusOptions('publish')];
+  const accountOptions = computed(() => [{ label: '全部账号', value: 'all' }, ...getReferenceOptions('account')]);
 
   const monthTitle = computed(() => currentMonth.value.format('YYYY年MM月'));
 
@@ -98,10 +101,21 @@
   });
 
   const filteredPlans = computed(() => {
-    if (statusFilter.value === 'all') {
-      return monthPlans.value;
-    }
-    return monthPlans.value.filter((item) => item.publishStatus === statusFilter.value);
+    return monthPlans.value.filter((item) => {
+      if (statusFilter.value !== 'all' && item.publishStatus !== statusFilter.value) {
+        return false;
+      }
+      if (accountFilter.value !== 'all' && item.accountId !== accountFilter.value) {
+        return false;
+      }
+      if (keyword.value) {
+        const searchValue = keyword.value.trim().toLowerCase();
+        if (!planTitle(item).toLowerCase().includes(searchValue)) {
+          return false;
+        }
+      }
+      return true;
+    });
   });
 
   const summaryCards = computed(() => [
@@ -129,16 +143,24 @@
     });
   });
 
-  onMounted(() => {
+  onMounted(async () => {
+    await ensureReferences(['draft', 'account']);
+    await loadPlans();
+  });
+
+  watch(currentMonth, () => {
     loadPlans();
   });
 
   async function loadPlans() {
     loading.value = true;
     try {
-      const data = await listPublishPlans();
+      const data = await listPublishPlans({
+        plannedPublishTime_begin: currentMonth.value.startOf('month').format('YYYY-MM-DD 00:00:00'),
+        plannedPublishTime_end: currentMonth.value.endOf('month').format('YYYY-MM-DD 23:59:59'),
+      });
       plans.value = data?.records || [];
-    } catch (error) {
+    } catch {
       createMessage.error('发布日历加载失败');
     } finally {
       loading.value = false;
@@ -177,30 +199,24 @@
   }
 
   function statusMeta(status?: string) {
-    const map = {
-      pending: { label: '待发布', color: 'orange' },
-      published: { label: '已发布', color: 'green' },
-      delayed: { label: '延期', color: 'red' },
-      canceled: { label: '取消', color: 'default' },
-      data_collected: { label: '已回收', color: 'blue' },
-    };
-    return map[status || ''] || { label: status || '未知', color: 'default' };
+    return getStatusMeta('publish', status);
   }
 
-  function copyPlan(item: RedbookPublishPlanItem) {
-    const text = [
-      `发布状态：${statusMeta(item.publishStatus).label}`,
-      `计划时间：${item.plannedPublishTime || '未设置'}`,
-      item.actualPublishTime ? `实际时间：${item.actualPublishTime}` : '',
-      `草稿ID：${item.draftId || '未绑定'}`,
-      `账号ID：${item.accountId || '未绑定'}`,
-      item.noteUrl ? `笔记链接：${item.noteUrl}` : '',
-      item.remark ? `备注：${item.remark}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
-    copyTextToClipboard(text);
-    createMessage.success('排期信息已复制');
+  function planTitle(item: RedbookPublishPlanItem) {
+    return getReferenceLabel('draft', item.draftId) || '未绑定草稿';
+  }
+
+  function planAccount(item: RedbookPublishPlanItem) {
+    return getReferenceLabel('account', item.accountId) || '未绑定账号';
+  }
+
+  function openPlan(item: RedbookPublishPlanItem) {
+    openPlanDrawer(true, { record: item });
+  }
+
+  async function handleDrawerSuccess() {
+    await ensureReferences(['draft', 'account']);
+    await loadPlans();
   }
 
   function goPublishPlan() {
@@ -242,6 +258,11 @@
     color: #0f172a;
   }
 
+  .toolbar-keyword {
+    width: 180px;
+  }
+
+  .account-select,
   .status-select {
     width: 128px;
   }
@@ -383,6 +404,10 @@
     .calendar-toolbar {
       align-items: stretch;
       flex-direction: column;
+    }
+
+    .toolbar-actions {
+      flex-wrap: wrap;
     }
 
     .summary-grid {

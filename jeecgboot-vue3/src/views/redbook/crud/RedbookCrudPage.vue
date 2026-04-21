@@ -8,6 +8,10 @@
         <a-dropdown v-if="selectedRowKeys.length > 0">
           <template #overlay>
             <a-menu>
+              <a-menu-item v-if="config.key === 'hotspot'" key="discard" @click="batchDiscardHotspots">
+                <Icon icon="ant-design:stop-outlined" />
+                批量标废弃
+              </a-menu-item>
               <a-menu-item key="delete" @click="batchHandleDelete">
                 <Icon icon="ant-design:delete-outlined" />
                 删除
@@ -25,11 +29,15 @@
       </template>
     </BasicTable>
     <RedbookCrudModal :config="config" :moduleApi="moduleApi" @register="registerModal" @success="reload" />
+    <RedbookDetailDrawer :config="config" :moduleApi="moduleApi" @register="registerDetailDrawer" @refresh="reload" @audit="handleAuditFromDrawer" />
+    <RedbookAuditModal @register="registerAuditModal" @success="handleAuditSuccess" />
   </div>
 </template>
 
 <script lang="ts" setup>
+  import { onMounted } from 'vue';
   import { useRoute } from 'vue-router';
+  import { useDrawer } from '/@/components/Drawer';
   import type { ActionItem } from '/@/components/Table';
   import { BasicTable, TableAction } from '/@/components/Table';
   import { useModal } from '/@/components/Modal';
@@ -37,14 +45,19 @@
   import { useListPage } from '/@/hooks/system/useListPage';
   import { copyTextToClipboard } from '/@/hooks/web/useCopyToClipboard';
   import { useMessage } from '/@/hooks/web/useMessage';
+  import RedbookAuditModal from './RedbookAuditModal.vue';
+  import RedbookDetailDrawer from './RedbookDetailDrawer.vue';
   import RedbookCrudModal from './RedbookCrudModal.vue';
   import { buildRedbookApi } from './redbook.api';
   import { getRedbookModuleConfig, resolveRedbookModuleKey } from './redbook.config';
+  import { ensureReferences } from './redbook.shared';
 
   const route = useRoute();
   const config = getRedbookModuleConfig(resolveRedbookModuleKey(route.path, String(route.meta.moduleKey || '')));
   const moduleApi = buildRedbookApi(config.apiBase);
   const [registerModal, { openModal }] = useModal();
+  const [registerAuditModal, { openModal: openAuditModal }] = useModal();
+  const [registerDetailDrawer, { openDrawer: openDetailDrawer }] = useDrawer();
   const { createMessage } = useMessage();
 
   const { onExportXls, onImportXls, tableContext } = useListPage({
@@ -77,8 +90,16 @@
 
   const [registerTable, { reload }, { rowSelection, selectedRowKeys }] = tableContext;
 
+  onMounted(() => {
+    ensureReferences(config.referenceKinds || []);
+  });
+
   function getActions(record): ActionItem[] {
     const actions: ActionItem[] = [
+      {
+        label: '详情',
+        onClick: handleView.bind(null, record),
+      },
       {
         label: '编辑',
         onClick: handleEdit.bind(null, record),
@@ -92,7 +113,20 @@
   }
 
   function getDropDownActions(record): ActionItem[] {
-    return [
+    const actions: ActionItem[] = [];
+    if (config.key === 'noteDraft' && record.status !== 'published') {
+      actions.push(
+        {
+          label: '审核通过',
+          onClick: handleAudit.bind(null, record, 'approve'),
+        },
+        {
+          label: '退回修改',
+          onClick: handleAudit.bind(null, record, 'reject'),
+        }
+      );
+    }
+    actions.push(
       ...getVisibleCustomActions(record).slice(1).map((item) => createActionItem(item, record)),
       {
         label: '删除',
@@ -100,8 +134,9 @@
           title: '是否确认删除',
           confirm: handleDelete.bind(null, record),
         },
-      },
-    ];
+      }
+    );
+    return actions;
   }
 
   function getVisibleCustomActions(record) {
@@ -132,6 +167,23 @@
     openModal(true, { record, isUpdate: true });
   }
 
+  function handleView(record) {
+    openDetailDrawer(true, { record });
+  }
+
+  function handleAudit(record, action: 'approve' | 'reject') {
+    openAuditModal(true, { record, action });
+  }
+
+  function handleAuditFromDrawer(payload: { action: 'approve' | 'reject'; record: Recordable }) {
+    handleAudit(payload.record, payload.action);
+  }
+
+  function handleAuditSuccess() {
+    createMessage.success('草稿审核状态已更新');
+    reload();
+  }
+
   async function handleDelete(record) {
     await moduleApi.deleteRecord({ id: record.id }, reload);
   }
@@ -153,6 +205,16 @@
     }
     await moduleApi.action(action.action, { id: record.id });
     createMessage.success(action.successMessage);
+    reload();
+  }
+
+  async function batchDiscardHotspots() {
+    const ids = [...selectedRowKeys.value];
+    for (const id of ids) {
+      await moduleApi.update({ id, status: 'discarded' });
+    }
+    createMessage.success(`已标记 ${ids.length} 条热点为已废弃`);
+    selectedRowKeys.value = [];
     reload();
   }
 
