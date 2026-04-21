@@ -686,9 +686,11 @@ SELECT '9b0b9b0b00000000000000000000000b' AS parent_id, '审核通过' AS name, 
 UNION ALL
 SELECT '9b0b9b0b00000000000000000000000b' AS parent_id, '审核退回' AS name, 'redbook:noteDraft:reject' AS perms, 9.00 AS sort_no, '草稿审核退回按钮权限' AS description
 UNION ALL
-SELECT '9b0b9b0b00000000000000000000000b' AS parent_id, '版本列表' AS name, 'redbook:noteDraft:versions' AS perms, 10.00 AS sort_no, '草稿版本列表按钮权限' AS description
+SELECT '9b0b9b0b00000000000000000000000b' AS parent_id, '风险检查' AS name, 'redbook:noteDraft:riskCheck' AS perms, 10.00 AS sort_no, '草稿独立风险检查按钮权限' AS description
 UNION ALL
-SELECT '9b0b9b0b00000000000000000000000b' AS parent_id, '恢复版本' AS name, 'redbook:noteDraft:restoreVersion' AS perms, 11.00 AS sort_no, '草稿恢复版本按钮权限' AS description
+SELECT '9b0b9b0b00000000000000000000000b' AS parent_id, '版本列表' AS name, 'redbook:noteDraft:versions' AS perms, 11.00 AS sort_no, '草稿版本列表按钮权限' AS description
+UNION ALL
+SELECT '9b0b9b0b00000000000000000000000b' AS parent_id, '恢复版本' AS name, 'redbook:noteDraft:restoreVersion' AS perms, 12.00 AS sort_no, '草稿恢复版本按钮权限' AS description
 UNION ALL
 SELECT '9b0b9b0b00000000000000000000000c' AS parent_id, '新增' AS name, 'redbook:publishPlan:add' AS perms, 1.00 AS sort_no, '发布计划新增按钮权限' AS description
 UNION ALL
@@ -725,6 +727,8 @@ UNION ALL
 SELECT '9b0b9b0b00000000000000000000000d' AS parent_id, '导出' AS name, 'redbook:noteMetric:exportXls' AS perms, 5.00 AS sort_no, '数据回收导出按钮权限' AS description
 UNION ALL
 SELECT '9b0b9b0b00000000000000000000000d' AS parent_id, '导入' AS name, 'redbook:noteMetric:importExcel' AS perms, 6.00 AS sort_no, '数据回收导入按钮权限' AS description
+UNION ALL
+SELECT '9b0b9b0b00000000000000000000000d' AS parent_id, '完整性检查' AS name, 'redbook:noteMetric:completeness' AS perms, 7.00 AS sort_no, '数据回收完整性检查按钮权限' AS description
 UNION ALL
 SELECT '9b0b9b0b00000000000000000000000e' AS parent_id, '新增' AS name, 'redbook:reviewReport:add' AS perms, 1.00 AS sort_no, '复盘报告新增按钮权限' AS description
 UNION ALL
@@ -880,6 +884,8 @@ SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteDraft:approve')) AS permission_i
 UNION ALL
 SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteDraft:reject')) AS permission_id
 UNION ALL
+SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteDraft:riskCheck')) AS permission_id
+UNION ALL
 SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteDraft:versions')) AS permission_id
 UNION ALL
 SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteDraft:restoreVersion')) AS permission_id
@@ -919,6 +925,8 @@ UNION ALL
 SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteMetric:exportXls')) AS permission_id
 UNION ALL
 SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteMetric:importExcel')) AS permission_id
+UNION ALL
+SELECT MD5(CONCAT('redbook-perm:', 'redbook:noteMetric:completeness')) AS permission_id
 UNION ALL
 SELECT MD5(CONCAT('redbook-perm:', 'redbook:reviewReport:add')) AS permission_id
 UNION ALL

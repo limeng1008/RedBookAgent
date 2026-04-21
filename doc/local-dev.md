@@ -132,6 +132,7 @@ POST   /importExcel
 /redbook/hotspotAnalysis/generateDraft
 /redbook/noteDraft/approve
 /redbook/noteDraft/reject
+/redbook/noteDraft/riskCheck
 /redbook/noteDraft/versions
 /redbook/noteDraft/restoreVersion
 /redbook/noteDraft/createPublishPlan
@@ -141,6 +142,7 @@ POST   /importExcel
 /redbook/publishPlan/cancel
 /redbook/publishPlan/restorePending
 /redbook/publishPlan/updateNoteUrl
+/redbook/noteMetric/completeness
 /redbook/reviewReport/generateScoped
 ```
 
@@ -236,11 +238,13 @@ rb_prompt_template
 - 热点 -> 分析 -> 草稿 -> 发布计划 -> 已发布 的闭环动作
 - 笔记草稿一键复制发布文案
 - 草稿审核通过 / 退回接口
+- 草稿独立风险检查接口，返回敏感词命中、命中字段、替换建议并回写风险摘要
 - 草稿新增、编辑、审核、恢复、发布状态版本留痕
 - 发布日历
 - 发布计划延期 / 取消 / 恢复待发布 / 补录链接接口
 - 发布计划一键生成 2h / 24h / 72h / 7d 数据回收记录
 - 数据回收指标自动计算
+- 数据回收支持 2h / 24h / 72h / 7d 完整性检查，四个节点完整后才推进为已回收数据
 - 热点导入预校验（赛道、标题、链接重复检查）
 - AI 输出按模板 `output_schema` 做结构校验，失败信息写入 `rawResult`
 - AI 调用会记录 `error_type`、`attempt_count`，并对网络超时 / 限流 / 服务端异常自动重试

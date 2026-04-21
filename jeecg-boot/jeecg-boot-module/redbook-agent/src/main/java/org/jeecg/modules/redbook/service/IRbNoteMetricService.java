@@ -5,9 +5,12 @@ import org.jeecg.modules.redbook.entity.RbNoteMetric;
 import org.jeecg.modules.redbook.vo.RedbookMetricCompletenessVO;
 
 import java.util.Collection;
+import java.util.List;
 
 public interface IRbNoteMetricService extends JeecgService<RbNoteMetric> {
     RbNoteMetric normalizeMetric(RbNoteMetric entity);
+
+    List<RbNoteMetric> saveBatchMetrics(String publishPlanId, List<RbNoteMetric> metrics);
 
     RedbookMetricCompletenessVO getMetricCompleteness(String publishPlanId);
 

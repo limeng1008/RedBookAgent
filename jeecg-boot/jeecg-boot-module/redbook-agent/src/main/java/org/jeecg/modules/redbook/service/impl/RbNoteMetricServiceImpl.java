@@ -11,6 +11,7 @@ import org.jeecg.modules.redbook.service.IRbPublishPlanService;
 import org.jeecg.modules.redbook.vo.RedbookMetricCompletenessVO;
 import org.jeecg.modules.redbook.vo.RedbookMetricNodeStatusVO;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -24,6 +25,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -76,6 +78,66 @@ public class RbNoteMetricServiceImpl extends ServiceImpl<RbNoteMetricMapper, RbN
         entity.setCollectRate(BigDecimal.valueOf(collects).divide(base, 4, RoundingMode.HALF_UP));
         entity.setCommentRate(BigDecimal.valueOf(comments).divide(base, 4, RoundingMode.HALF_UP));
         return entity;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<RbNoteMetric> saveBatchMetrics(String publishPlanId, List<RbNoteMetric> metrics) {
+        if (isBlank(publishPlanId)) {
+            throw new IllegalArgumentException("发布计划ID不能为空");
+        }
+        if (metrics == null || metrics.isEmpty()) {
+            throw new IllegalArgumentException("请至少录入一条数据回收记录");
+        }
+
+        Map<String, RbNoteMetric> existingMetricByNode = lambdaQuery()
+            .eq(RbNoteMetric::getPublishPlanId, publishPlanId)
+            .list()
+            .stream()
+            .filter(Objects::nonNull)
+            .filter(metric -> !isBlank(metric.getCollectNode()))
+            .collect(Collectors.toMap(
+                metric -> normalizeExistingCollectNode(metric.getCollectNode()),
+                metric -> metric,
+                this::pickLaterMetric,
+                LinkedHashMap::new
+            ));
+
+        Set<String> incomingNodeSet = new LinkedHashSet<>();
+        List<RbNoteMetric> savedMetrics = new ArrayList<>();
+        for (RbNoteMetric item : metrics) {
+            if (item == null) {
+                continue;
+            }
+            item.setPublishPlanId(publishPlanId);
+            String collectNode = normalizeCollectNode(item.getCollectNode());
+            item.setCollectNode(collectNode);
+            if (!incomingNodeSet.add(collectNode)) {
+                throw new IllegalArgumentException("采集节点重复：" + collectNode);
+            }
+
+            RbNoteMetric oldMetric = null;
+            if (!isBlank(item.getId())) {
+                oldMetric = getById(item.getId());
+                if (oldMetric == null) {
+                    throw new IllegalArgumentException("数据回收记录不存在：" + item.getId());
+                }
+                if (!publishPlanId.equals(oldMetric.getPublishPlanId())) {
+                    throw new IllegalArgumentException("数据回收记录不属于当前发布计划：" + item.getId());
+                }
+            } else {
+                oldMetric = existingMetricByNode.get(collectNode);
+                if (oldMetric != null) {
+                    item.setId(oldMetric.getId());
+                }
+            }
+
+            RbNoteMetric normalized = normalizeMetric(item);
+            saveOrUpdate(normalized);
+            savedMetrics.add(getById(normalized.getId()));
+        }
+        refreshPublishPlanStatus(publishPlanId);
+        return savedMetrics;
     }
 
     @Override

@@ -629,7 +629,56 @@ POST /redbook/noteDraft/reject
 
 返回 `result.auditStatus = rejected`，`result.status = pending_review`。
 
-### 4.9 草稿版本列表
+### 4.9 草稿独立风险检查
+
+```http
+POST /redbook/noteDraft/riskCheck
+```
+
+请求体：
+
+```json
+{
+  "id": "draft_001"
+}
+```
+
+返回 `result`：
+
+```json
+{
+  "draftId": "draft_001",
+  "title": "职场成长样例草稿",
+  "passed": false,
+  "requiresManualReview": true,
+  "riskLevel": "medium",
+  "hitCount": 2,
+  "matchedFields": ["标题", "正文"],
+  "replacementSuggestions": ["建议改成更客观、可验证的表达"],
+  "summary": "本次风险检查命中 2 个敏感词...",
+  "checkedTime": "2026-04-21 21:00:00",
+  "hits": [
+    {
+      "word": "绝对",
+      "category": "夸张承诺",
+      "riskLevel": "medium",
+      "replacementSuggestion": "建议改成更客观、可验证的表达",
+      "matchedFields": ["正文"]
+    }
+  ]
+}
+```
+
+业务规则：
+
+| 场景 | 规则 |
+| --- | --- |
+| 草稿不存在 | 返回失败 |
+| 未命中敏感词 | `passed = true`，`riskLevel = low` |
+| 命中敏感词 | 返回命中词、字段、等级和替换建议 |
+| 检查完成 | 回写草稿 `riskCheckResult` 摘要，不自动改变审核状态 |
+
+### 4.10 草稿版本列表
 
 ```http
 GET /redbook/noteDraft/versions?draftId={draftId}
@@ -653,7 +702,7 @@ GET /redbook/noteDraft/versions?draftId={draftId}
 | `status` | string | 草稿状态快照 |
 | `remark` | string | 版本备注 |
 
-### 4.10 恢复草稿版本
+### 4.11 恢复草稿版本
 
 ```http
 POST /redbook/noteDraft/restoreVersion
@@ -675,7 +724,7 @@ POST /redbook/noteDraft/restoreVersion
 | 恢复成功 | 草稿回到 `pending_review`，审核状态回到 `pending` |
 | 恢复成功 | 后端追加一条 `restore` 版本 |
 
-### 4.11 草稿加入发布计划
+### 4.12 草稿加入发布计划
 
 ```http
 POST /redbook/noteDraft/createPublishPlan
@@ -699,7 +748,7 @@ POST /redbook/noteDraft/createPublishPlan
 
 返回 `result` 为 `PublishPlan`。
 
-### 4.12 导入导出草稿
+### 4.13 导入导出草稿
 
 ```http
 GET  /redbook/noteDraft/exportXls
@@ -852,7 +901,10 @@ POST /redbook/publishPlan/createMetric
 | --- | --- |
 | 未发布计划 | 返回失败或提示先标记发布 |
 | 已发布计划 | 创建 `RbNoteMetric` 初始记录 |
-| 创建成功 | 发布计划状态可推进为 `data_collected` |
+| 创建成功 | 按 2h、24h、72h、7d 顺序创建下一个缺失节点 |
+| 四个节点已存在 | 返回失败，提示直接编辑现有记录 |
+| 节点未完整 | 发布计划保持 `published` |
+| 四个节点完整 | 发布计划推进为 `data_collected` |
 
 返回 `result` 为数据回收记录。
 
@@ -951,9 +1003,90 @@ POST /redbook/publishPlan/importExcel
 | `plannedPublishTime` | 必填 |
 | `publishStatus` | 为空默认 `pending` |
 
-## 6. 工作台与复盘看板
+## 6. 数据回收
 
-### 6.1 获取复盘看板
+模块路径：
+
+```text
+/redbook/noteMetric
+```
+
+### 6.1 NoteMetric 字段
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | 编辑必填 | 数据回收记录 ID |
+| `publishPlanId` | string | 是 | 发布计划 ID |
+| `noteDraftId` | string | 否 | 草稿 ID，后端可根据发布计划补齐 |
+| `collectNode` | string | 是 | `2h` / `24h` / `72h` / `7d` |
+| `views` | number | 否 | 阅读/播放量 |
+| `likes` | number | 否 | 点赞数 |
+| `collects` | number | 否 | 收藏数 |
+| `comments` | number | 否 | 评论数 |
+| `shares` | number | 否 | 分享数 |
+| `collectTime` | string | 否 | 采集时间 |
+
+新增、编辑、导入时，后端会统一重算：
+
+| 字段 | 公式 |
+| --- | --- |
+| `interactionRate` | `(likes + collects + comments + shares) / views` |
+| `collectRate` | `collects / views` |
+| `commentRate` | `comments / views` |
+
+### 6.2 查询发布计划数据回收完整性
+
+```http
+GET /redbook/noteMetric/completeness?publishPlanId={publishPlanId}
+```
+
+返回 `result`：
+
+```json
+{
+  "publishPlanId": "publish_plan_001",
+  "draftId": "draft_001",
+  "publishStatus": "published",
+  "completed": false,
+  "filledNodeCount": 2,
+  "requiredNodeCount": 4,
+  "coverageRate": 0.5,
+  "requiredNodes": ["2h", "24h", "72h", "7d"],
+  "existingNodes": ["2h", "24h"],
+  "missingNodes": ["72h", "7d"],
+  "summary": "当前已完成 2/4 个关键节点，仍缺少 72h、7d，建议继续补录。",
+  "nodeStatusList": []
+}
+```
+
+状态回写规则：
+
+| 场景 | 规则 |
+| --- | --- |
+| 发布计划为 `published` 且节点不完整 | 保持 `published` |
+| 发布计划为 `published` 且四节点完整 | 自动推进为 `data_collected` |
+| 删除或修改导致四节点不完整 | 从 `data_collected` 回退为 `published` |
+| 发布计划为 `pending` / `delayed` / `canceled` | 不允许录入数据回收 |
+
+### 6.3 导入导出数据回收
+
+```http
+GET  /redbook/noteMetric/exportXls
+POST /redbook/noteMetric/importExcel
+```
+
+导入约束：
+
+| 字段 | 规则 |
+| --- | --- |
+| `publishPlanId` | 必填，必须存在且发布计划已发布 |
+| `collectNode` | 必填，仅支持 `2h` / `24h` / `72h` / `7d` |
+| 数值字段 | 为空按 0 处理 |
+| 导入完成 | 自动重算指标并刷新发布计划完整性 |
+
+## 7. 工作台与复盘看板
+
+### 7.1 获取复盘看板
 
 ```http
 GET /redbook/workbench/reviewDashboard
@@ -1002,7 +1135,7 @@ GET /redbook/workbench/reviewDashboard
 | 存在匹配复盘报告 | 下一轮建议优先取最近一份匹配报告 |
 | 无匹配复盘报告 | 返回内置兜底建议 |
 
-## 7. 前后端联调清单
+## 8. 前后端联调清单
 
 | 流程 | 后端接口 | 前端预期 |
 | --- | --- | --- |
@@ -1012,6 +1145,7 @@ GET /redbook/workbench/reviewDashboard
 | 分析生成草稿 | `POST /redbook/hotspotAnalysis/generateDraft` | 成功后打开草稿详情 |
 | 草稿审核通过 | `POST /redbook/noteDraft/approve` | 状态变为待发布 |
 | 草稿审核退回 | `POST /redbook/noteDraft/reject` | 状态回到待审核并显示意见 |
+| 草稿风险检查 | `POST /redbook/noteDraft/riskCheck` | 展示命中词、字段和替换建议 |
 | 草稿版本 | `GET /redbook/noteDraft/versions` | 展示版本列表，可恢复 |
 | 加入发布计划 | `POST /redbook/noteDraft/createPublishPlan` | 生成日历事件 |
 | 发布日历 | `GET /redbook/publishPlan/list` | 按计划发布时间渲染 |
@@ -1020,9 +1154,10 @@ GET /redbook/workbench/reviewDashboard
 | 取消排期 | `POST /redbook/publishPlan/cancel` | 排期取消 |
 | 补录链接 | `POST /redbook/publishPlan/updateNoteUrl` | 保存真实笔记链接 |
 | 标记已发布 | `POST /redbook/publishPlan/markPublished` | 更新发布状态和草稿状态 |
+| 数据回收完整性 | `GET /redbook/noteMetric/completeness` | 提示缺失的 2h / 24h / 72h / 7d 节点 |
 | 复盘看板筛选 | `GET /redbook/workbench/reviewDashboard` | 支持按时间 / 赛道 / 账号刷新看板 |
 
-## 8. V1 不支持能力
+## 9. V1 不支持能力
 
 - 不做小红书自动登录。
 - 不做自动发布。

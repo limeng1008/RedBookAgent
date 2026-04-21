@@ -259,24 +259,6 @@ jeecg:
     # 接入域名
     endpoint: sms.tencentcloudapi.com
 
-redbook:
-  ai:
-    enabled: false
-    # local / dify / fastgpt
-    provider: local
-    # Dify 示例: https://your-dify-host/v1
-    # FastGPT 示例: https://your-fastgpt-host/api
-    base-url:
-    api-key:
-    timeout-seconds: 60
-    retry-times: 1
-    user-prefix: redbook-agent
-    secretId: ??
-    secretKey: ??
-    # 应用ID
-    sdkAppId: ??
-    # 地域信息
-    region: ap-beijing
   # 在线预览文件服务器地址配置
   file-view-domain: http://fileview.jeecg.com
   # minio文件上传
@@ -323,6 +305,24 @@ redbook:
     app-id: ??
     api-key: ??
     secret-key: ??
+redbook:
+  ai:
+    enabled: false
+    # local / dify / fastgpt
+    provider: local
+    # Dify 示例: https://your-dify-host/v1
+    # FastGPT 示例: https://your-fastgpt-host/api
+    base-url:
+    api-key:
+    timeout-seconds: 60
+    retry-times: 1
+    user-prefix: redbook-agent
+    secretId: ??
+    secretKey: ??
+    # 应用ID
+    sdkAppId: ??
+    # 地域信息
+    region: ap-beijing
 #cas单点登录
 cas:
   prefixUrl: http://cas.example.org:8443/cas

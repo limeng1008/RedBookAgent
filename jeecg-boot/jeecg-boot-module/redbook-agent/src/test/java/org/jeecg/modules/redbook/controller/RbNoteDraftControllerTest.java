@@ -39,7 +39,7 @@ class RbNoteDraftControllerTest {
         RbNoteDraft draft = new RbNoteDraft();
         draft.setId("draft-1");
         draft.setAuditStatus("approved");
-        given(redbookWorkflowService.approveDraft("draft-1", "内容合规，可发布")).willReturn(draft);
+        given(rbNoteDraftService.approveDraft("draft-1", "内容合规，可发布")).willReturn(draft);
 
         RedbookAuditRequest request = new RedbookAuditRequest();
         request.setId("draft-1");
@@ -49,12 +49,12 @@ class RbNoteDraftControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.message").value("草稿审核已通过"))
+            .andExpect(jsonPath("$.message").value("草稿已审核通过"))
             .andExpect(jsonPath("$.result.id").value("draft-1"))
             .andExpect(jsonPath("$.result.auditStatus").value("approved"));
 
-        then(redbookWorkflowService).should().approveDraft("draft-1", "内容合规，可发布");
-        then(redbookWorkflowService).should(never()).rejectDraft(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        then(rbNoteDraftService).should().approveDraft("draft-1", "内容合规，可发布");
+        then(rbNoteDraftService).should(never()).rejectDraft(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test
@@ -62,7 +62,7 @@ class RbNoteDraftControllerTest {
         RbNoteDraft draft = new RbNoteDraft();
         draft.setId("draft-2");
         draft.setAuditStatus("rejected");
-        given(redbookWorkflowService.rejectDraft("draft-2", "标题口语化不足，需要重写"))
+        given(rbNoteDraftService.rejectDraft("draft-2", "标题口语化不足，需要重写"))
             .willReturn(draft);
 
         RedbookAuditRequest request = new RedbookAuditRequest();
@@ -73,11 +73,11 @@ class RbNoteDraftControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.message").value("草稿已退回待修改"))
+            .andExpect(jsonPath("$.message").value("草稿已退回修改"))
             .andExpect(jsonPath("$.result.id").value("draft-2"))
             .andExpect(jsonPath("$.result.auditStatus").value("rejected"));
 
-        then(redbookWorkflowService).should().rejectDraft("draft-2", "标题口语化不足，需要重写");
-        then(redbookWorkflowService).should(never()).approveDraft(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        then(rbNoteDraftService).should().rejectDraft("draft-2", "标题口语化不足，需要重写");
+        then(rbNoteDraftService).should(never()).approveDraft(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
     }
 }

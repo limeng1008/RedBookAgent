@@ -3,6 +3,7 @@
     <BasicTable @register="registerTable" :rowSelection="rowSelection">
       <template #tableTitle>
         <a-button type="primary" preIcon="ant-design:plus-outlined" @click="handleAdd">新增</a-button>
+        <a-button v-if="config.key === 'noteMetric'" type="primary" preIcon="ant-design:table-outlined" @click="handleMetricBatch">批量录入</a-button>
         <a-button type="primary" preIcon="ant-design:export-outlined" @click="onExportXls">导出</a-button>
         <j-upload-button type="primary" preIcon="ant-design:import-outlined" @click="onImportXls">导入</j-upload-button>
         <a-dropdown v-if="selectedRowKeys.length > 0">
@@ -30,6 +31,7 @@
     </BasicTable>
     <RedbookCrudModal :config="config" :moduleApi="moduleApi" @register="registerModal" @success="reload" />
     <RedbookDetailDrawer :config="config" :moduleApi="moduleApi" @register="registerDetailDrawer" @refresh="reload" @audit="handleAuditFromDrawer" />
+    <RedbookMetricBatchDrawer v-if="config.key === 'noteMetric'" @register="registerMetricBatchDrawer" @success="handleMetricBatchSuccess" />
     <RedbookAuditModal @register="registerAuditModal" @success="handleAuditSuccess" />
   </div>
 </template>
@@ -47,6 +49,7 @@
   import { useMessage } from '/@/hooks/web/useMessage';
   import RedbookAuditModal from './RedbookAuditModal.vue';
   import RedbookDetailDrawer from './RedbookDetailDrawer.vue';
+  import RedbookMetricBatchDrawer from './RedbookMetricBatchDrawer.vue';
   import RedbookCrudModal from './RedbookCrudModal.vue';
   import { buildRedbookApi } from './redbook.api';
   import { getRedbookModuleConfig, resolveRedbookModuleKey } from './redbook.config';
@@ -58,6 +61,7 @@
   const [registerModal, { openModal }] = useModal();
   const [registerAuditModal, { openModal: openAuditModal }] = useModal();
   const [registerDetailDrawer, { openDrawer: openDetailDrawer }] = useDrawer();
+  const [registerMetricBatchDrawer, { openDrawer: openMetricBatchDrawer }] = useDrawer();
   const { createMessage } = useMessage();
 
   const { onExportXls, onImportXls, tableContext } = useListPage({
@@ -169,6 +173,14 @@
 
   function handleView(record) {
     openDetailDrawer(true, { record });
+  }
+
+  function handleMetricBatch() {
+    openMetricBatchDrawer(true, {});
+  }
+
+  function handleMetricBatchSuccess() {
+    reload();
   }
 
   function handleAudit(record, action: 'approve' | 'reject') {

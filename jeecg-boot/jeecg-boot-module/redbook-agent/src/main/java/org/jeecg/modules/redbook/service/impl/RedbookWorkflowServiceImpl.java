@@ -422,11 +422,11 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         metricGroup.forEach((publishPlanId, metrics) -> latestMetricMap.put(publishPlanId, pickLatestMetric(metrics)));
 
         List<RbPublishPlan> highPerformPlans = publishedPlans.stream()
-            .sorted(Comparator.comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)).reversed())
+            .sorted(Comparator.<RbPublishPlan, BigDecimal>comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)).reversed())
             .limit(3)
             .collect(Collectors.toList());
         List<RbPublishPlan> lowPerformPlans = publishedPlans.stream()
-            .sorted(Comparator.comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)))
+            .sorted(Comparator.<RbPublishPlan, BigDecimal>comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)))
             .limit(Math.min(3, publishedPlans.size()))
             .collect(Collectors.toList());
 
@@ -1047,7 +1047,7 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         ));
         context.put("high_examples", buildPerformanceSamples(
             publishedPlans.stream()
-                .sorted(Comparator.comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)).reversed())
+                .sorted(Comparator.<RbPublishPlan, BigDecimal>comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)).reversed())
                 .limit(5)
                 .collect(Collectors.toList()),
             draftMap,
@@ -1055,7 +1055,7 @@ public class RedbookWorkflowServiceImpl implements IRedbookWorkflowService {
         ));
         context.put("low_examples", buildPerformanceSamples(
             publishedPlans.stream()
-                .sorted(Comparator.comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)))
+                .sorted(Comparator.<RbPublishPlan, BigDecimal>comparing(plan -> buildReviewWeight(latestMetricMap.get(plan.getId())), Comparator.nullsLast(BigDecimal::compareTo)))
                 .limit(5)
                 .collect(Collectors.toList()),
             draftMap,

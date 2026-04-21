@@ -8,7 +8,9 @@ import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.jeecg.common.api.vo.Result;
 import org.jeecg.common.aspect.annotation.AutoLog;
 import org.jeecg.modules.redbook.entity.RbNoteMetric;
+import org.jeecg.modules.redbook.model.req.RedbookMetricBatchSaveRequest;
 import org.jeecg.modules.redbook.service.IRbNoteMetricService;
+import org.jeecg.modules.redbook.vo.RedbookMetricBatchSaveResultVO;
 import org.jeecg.modules.redbook.vo.RedbookMetricCompletenessVO;
 import org.jeecgframework.poi.excel.ExcelImportUtil;
 import org.jeecgframework.poi.excel.entity.ImportParams;
@@ -92,6 +94,19 @@ public class RbNoteMetricController extends RedbookCrudController<RbNoteMetric, 
     @RequiresPermissions("redbook:noteMetric:completeness")
     public Result<RedbookMetricCompletenessVO> completeness(@RequestParam(name = "publishPlanId") String publishPlanId) {
         return Result.OK(service.getMetricCompleteness(publishPlanId));
+    }
+
+    @PostMapping(value = "/batchSave")
+    @AutoLog(value = "批量保存笔记数据")
+    @Operation(summary = "按发布计划批量保存 2h/24h/72h/7d 数据回收")
+    @RequiresPermissions("redbook:noteMetric:edit")
+    public Result<RedbookMetricBatchSaveResultVO> batchSave(@RequestBody RedbookMetricBatchSaveRequest request) {
+        List<RbNoteMetric> records = service.saveBatchMetrics(request.getPublishPlanId(), request.getMetrics());
+        RedbookMetricBatchSaveResultVO result = new RedbookMetricBatchSaveResultVO();
+        result.setPublishPlanId(request.getPublishPlanId());
+        result.setRecords(records);
+        result.setCompleteness(service.getMetricCompleteness(request.getPublishPlanId()));
+        return Result.OK("批量保存成功！", result);
     }
 
     @RequestMapping(value = "/exportXls")
